@@ -33,7 +33,7 @@ git pull --ff-only
 git switch -c day2/streaming-ctr
 ```
 
-Naming: `day<N>/<short-topic>` for roadmap work (e.g. `day4/ndcg`, `day6/rank-endpoint`), `docs/<topic>` for documentation, and `fix/<topic>` for bug fixes.
+Naming: `day<N>/<short-topic>` for roadmap work (e.g. `day4/ndcg`, `day6/recommendations-endpoint`), `docs/<topic>` for documentation, and `fix/<topic>` for bug fixes.
 
 ## Commits
 
