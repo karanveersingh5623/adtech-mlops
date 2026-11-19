@@ -3,7 +3,7 @@
 A structured, hands-on project in which **two engineers learn together** by building a small advertising machine-learning system from raw events to a tested, benchmarked prediction service. Over ten days it covers:
 
 - AdTech fundamentals and advertising data processing
-- Click-through-rate (CTR) prediction and ranking
+- **A working ad recommendation engine:** catalog retrieval, eligibility filtering, CTR-based scoring, personalization with a cold-start fallback, deterministic top-K ranking, and a `POST /recommendations` API
 - Feature engineering and online inference
 - Model optimization: quantization, ONNX, pruning, distillation
 - Production MLOps, monitoring, and system architecture
@@ -38,6 +38,7 @@ Further documentation:
 | Document | Purpose |
 |---|---|
 | [docs/ROADMAP.md](docs/ROADMAP.md) | Full day-by-day plan: topics, implementation steps, explanation questions |
+| [docs/RECOMMENDER.md](docs/RECOMMENDER.md) | **Recommendation engine specification** (central deliverable): CTR vs ranking vs recommender, interfaces, API contract, tests, ranking fixtures, end-to-end demo |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Current and target architecture, design trade-offs, [core ML system concepts](docs/ARCHITECTURE.md#8-core-ml-system-concepts) (training vs inference vs serving, model size vs data volume, retraining loops) |
 | [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) | Learning method, branching, pull requests, review checklist, definition of done |
 | [docs/DAY1.md](docs/DAY1.md) | Day 1 guide: AdTech fundamentals and Pandas data exploration |
@@ -46,20 +47,28 @@ Further documentation:
 
 ## 1. Project overview and objectives
 
-**Scenario.** A content site has several eligible advertisements for each page view. Given the context available at request time (user, device, hour, recent behavior), the system estimates the probability that the user clicks each candidate ad and returns a ranked list, quickly and reliably.
+**Scenario.** A content site has an ad catalog and requests ads for each page view. For each request (user, device, time), the system:
+
+1. Retrieves candidate ads from the catalog.
+2. Removes ads that are not eligible.
+3. Looks up the user's past behavior.
+4. Estimates the probability that the user clicks each remaining ad.
+5. Returns the top-K as recommendations, quickly and reliably.
+
+**The central deliverable is this working recommendation engine.** Its specification is in [docs/RECOMMENDER.md](docs/RECOMMENDER.md).
 
 By the end of Day 10 the project aims to demonstrate:
 
 - [ ] An explanation of the end-to-end ad request lifecycle, plus reproducible data exploration and data-quality checks (Day 1)
 - [ ] Memory-efficient, streaming data processing that matches in-memory results (Day 2)
 - [ ] A reproducible CTR training pipeline with a saved model artifact and a baseline comparison (Day 3)
-- [ ] Classification and ranking evaluation, including Precision@K and NDCG@K (Day 4)
-- [ ] Point-in-time-correct behavioral features with simulated offline and online access (Day 5)
-- [ ] A tested FastAPI ranking service in Docker with measured p50/p95/p99 latency (Day 6)
+- [ ] A recommendation engine core: catalog retrieval, eligibility filtering, CTR scoring, deterministic top-K ranking. Ranking metrics are measured on labeled fixtures (Day 4)
+- [ ] Time-correct user-behavior features, a personalized scoring path, and a cold-start fallback, with offline/online consistency checks (Day 5)
+- [ ] A tested `POST /recommendations` API in Docker with output validation and measured p50/p95/p99 latency (Day 6)
 - [ ] A small neural baseline with ONNX export and a measured quantization experiment (Day 7)
 - [ ] Measured pruning and teacher/student distillation experiments (Day 8)
 - [ ] Documented deployment, monitoring, A/B testing, privacy strategy, and end-to-end architecture with scaling and failure analysis (Day 9)
-- [ ] A working end-to-end demo from a fresh checkout with all tests passing (Day 10)
+- [ ] An end-to-end recommendation demo from a fresh checkout (request → candidate generation → filtering → feature retrieval → scoring → ranking → response), with all tests passing (Day 10)
 
 **Learning objective.** Both contributors should be able to build, debug, test, and explain **every** major component, not only the parts they wrote.
 
@@ -72,9 +81,9 @@ By the end of Day 10 the project aims to demonstrate:
 | Data-quality checks and CTR breakdowns | 🗓️ Planned | 1 |
 | Chunked/streaming CSV aggregation | 🗓️ Planned | 2 |
 | Logistic-regression CTR model, saved artifact | 🗓️ Planned | 3 |
-| Classification metrics, top-K ranking, ranking metrics | 🗓️ Planned | 4 |
-| Behavioral features, local offline/online feature store | 🗓️ Planned | 5 |
-| FastAPI `/health` and `/rank`, Docker, latency benchmark | 🗓️ Planned | 6 |
+| Recommendation engine core: ad catalog, retrieval, eligibility, CTR scoring, top-K ranking; classification and ranking metrics; labeled ranking fixtures | 🗓️ Planned | 4 |
+| Time-correct user features, personalized scoring, cold-start fallback, local offline/online feature store | 🗓️ Planned | 5 |
+| FastAPI `/health` and `POST /recommendations`, Docker, latency benchmark | 🗓️ Planned | 6 |
 | Small neural baseline, ONNX export, INT8 quantization benchmark | 🗓️ Planned | 7 |
 | Pruning (unstructured and structured) and knowledge distillation experiments | 🗓️ Planned | 8 |
 | Drift metric (e.g., PSI) script | ➕ Optional | 9 |
@@ -85,6 +94,7 @@ By the end of Day 10 the project aims to demonstrate:
 
 - **CTR prediction** estimates the probability that one impression is clicked.
 - **Ranking** orders several eligible candidates for one request. Here it ranks by predicted CTR. Real systems also weigh bids, budgets, pacing, and policy constraints, which are out of scope.
+- **A recommender system** is the whole engine around them: catalog, retrieval, eligibility rules, request-time features, cold-start handling, scoring, ranking, and a validated response. See [CTR prediction vs ranking vs a recommender system](docs/RECOMMENDER.md#1-ctr-prediction-vs-ranking-vs-a-recommender-system).
 - **Conversion** is a later outcome. The `converted` column exists in the data, but it is never an input to an impression-time CTR model.
 - **Training, inference, serving, and evaluation** are different activities. Adding service replicas is not the same as optimizing the model. See [core ML system concepts](docs/ARCHITECTURE.md#8-core-ml-system-concepts).
 
@@ -109,9 +119,10 @@ flowchart LR
     end
 
     subgraph Online["Online (serving)"]
-        REQ(["POST /rank"]) --> API["FastAPI service (Day 6)"]
-        API --> FS[("Online feature lookup (Day 5)")]
-        API --> SCORE["Score and top-K"]
+        REQ(["POST /recommendations"]) --> API["FastAPI service (Day 6)"]
+        API --> RET["Retrieve from catalog + eligibility (Day 4)"]
+        RET --> SCORE["Score and top-K (Days 4–5)"]
+        FS[("Online feature lookup (Day 5)")] --> SCORE
         ART --> SCORE
     end
 
@@ -169,9 +180,10 @@ Both files are **synthetic**, produced by [src/generate_synthetic.py](src/genera
 ### Generator assumptions and modeling rules
 
 - Each user has one hidden preferred category. Clicks are much more likely when the ad category matches it, and slightly more likely between 18:00 and 22:59 UTC. Device has **no** generated effect.
-- **Each `request_id` has exactly one candidate ad.** Multi-candidate ranking evaluation therefore needs constructed candidate sets. See [Day 4](docs/ROADMAP.md#day-4--classification-and-ranking-evaluation).
+- **Each `request_id` has exactly one shown ad.** The outcomes of unshown ads are unknown, not negative. Ranking is therefore evaluated on [labeled synthetic fixtures](docs/RECOMMENDER.md#8-offline-ranking-evaluation-and-labeled-fixtures), not on the raw logs.
+- **There is no ad catalog in the logs.** Day 4 adds a small, hand-written `data/ad_catalog.csv`. The generated datasets stay unchanged.
 - A conversion can only follow a click in this generator. That is not a universal attribution rule.
-- **Time rule:** a prediction at time *t* may use only information available at or before *t*. Later clicks and conversions are labels, never features for the same prediction.
+- **Time rule:** a prediction at time *t* may use only events with `event_time` strictly before *t*. Later clicks and conversions are labels, never features for the same prediction. The current impression's own click and conversion count as later events.
 - If a label is missing in a future dataset, investigate it and report any excluded rows. Do not silently treat it as 0.
 - The patterns are intentionally simple and learnable. Good metrics on this data **do not** demonstrate real-world performance.
 
@@ -186,6 +198,7 @@ adtech-mlops/
 ├── docs/
 │   ├── ROADMAP.md                  # Detailed 10-day plan
 │   ├── ARCHITECTURE.md             # Current and target architecture
+│   ├── RECOMMENDER.md              # Recommendation engine specification
 │   ├── CONTRIBUTING.md             # Learning method, collaboration and Git workflow
 │   ├── DAY1.md                     # Day 1 guide: AdTech fundamentals + data exploration
 │   ├── DAY7.md                     # Day 7 guide: quantization and ONNX
@@ -212,14 +225,22 @@ src/
 ├── streaming.py           # Day 2   chunked CSV processing and streaming CTR
 ├── train.py               # Day 3   training pipeline
 ├── evaluate.py            # Day 4   classification metrics
-├── ranking.py             # Day 4   candidate scoring, top-K, Precision@K, NDCG@K
-├── features.py            # Day 5   behavioral feature computation
+├── catalog.py             # Day 4   ad catalog loading and validation
+├── retrieval.py           # Day 4   candidate retrieval
+├── eligibility.py         # Day 4   hard eligibility rules
+├── scoring.py             # Days 4–5 context-only and personalized scorers
+├── ranking.py             # Day 4   deterministic top-K ranking
+├── ranking_metrics.py     # Day 4   Precision@K, Recall@K, NDCG@K
+├── recommender.py         # Days 4–5 retrieve → filter → features → score → rank
+├── features.py            # Day 5   time-correct behavioral features
 ├── feature_store.py       # Day 5   local offline/online feature access
-├── api.py                 # Day 6   FastAPI service
+├── api.py                 # Day 6   FastAPI POST /recommendations
 ├── benchmark.py           # Days 6–8 latency benchmarks
 ├── nn_model.py            # Day 7   small neural-network baseline
 └── optimize.py            # Days 7–8 ONNX export, quantization, pruning, distillation
 tests/                     # test_<module>.py for each module above
+tests/fixtures/            # Day 4   labeled ranking fixtures (hand-labeled and synthetic-oracle)
+data/ad_catalog.csv        # Day 4   small hand-written ad catalog
 reports/                   # data_profile.md, model_card.md, latency.md, optimization.md
 docs/MLOPS.md              # Day 9   deployment, monitoring, experimentation, guardrails
 models/                    # Local artifacts (git-ignored)
@@ -271,13 +292,13 @@ The full plan with implementation steps and explanation questions is in **[docs/
 | 1 | [AdTech fundamentals, Python and Pandas](docs/DAY1.md) | Ad request lifecycle, ecosystem roles, candidate selection and ranking, event collection; DataFrames, validation, CTR, `groupby`, leakage | Data-quality report, CTR breakdowns, one ad request explained |
 | 2 | Python, large files and streaming | Generators, collections, chunked CSV, JSON, malformed records, incremental metrics, testing | Streaming CTR utility with equivalence tests |
 | 3 | Classification and model training | Chronological vs random splits, leakage, encoding, pipelines, logistic regression, serialization | Reproducible training pipeline and model artifact |
-| 4 | Classification and ranking evaluation | Precision/recall/F1, ROC-AUC, PR-AUC, log loss, calibration, Precision@K, Recall@K, NDCG@K, model vs business metrics | Evaluation and ranking modules with tests |
-| 5 | Feature engineering and feature stores | User and ad aggregates, freshness, point-in-time correctness, training-serving skew, delayed conversions | Feature pipeline and local feature store |
-| 6 | Low-latency inference and serving | Inference vs serving, FastAPI, Docker, p50/p95/p99, batching, concurrency, horizontal scaling, caching, CPU/GPU | Inference API, Docker, latency benchmark |
+| 4 | [Recommendation engine core and ranking evaluation](docs/RECOMMENDER.md) | CTR vs ranking vs recommender; catalog retrieval, eligibility, scoring, top-K; precision/recall/F1, ROC-AUC, PR-AUC, log loss, Precision@K, Recall@K, NDCG@K; logged-data bias | `recommend()` engine core, metrics, labeled ranking fixtures |
+| 5 | Personalization, feature engineering and feature stores | Time-correct user features, personalized scoring, cold start, point-in-time correctness, training-serving skew, delayed conversions | Personalized scorer, cold-start fallback, local feature store |
+| 6 | Recommendations API and low-latency serving | Inference vs serving, FastAPI, response validation, Docker, p50/p95/p99, batching, concurrency, horizontal scaling, caching, CPU/GPU | `POST /recommendations`, integration tests, Docker, latency benchmark |
 | 7 | [Optimization I: quantization and ONNX](docs/DAY7.md) | FP32/FP16/INT8, scale and zero point, dynamic vs static, PTQ vs QAT, ONNX Runtime, parity | Neural baseline, ONNX export, quantization benchmark |
 | 8 | [Optimization II: pruning and distillation](docs/DAY8.md) | Magnitude pruning, structured vs unstructured, sparsity, fine-tuning; teacher/student, soft targets, temperature | Pruning and distillation experiments, benchmark summary |
 | 9 | Production MLOps and system architecture | Versioning, shadow/canary/champion-challenger, A/B tests, drift, retraining, rollback, SLOs, PII, capacity, failures | Architecture diagram, deployment, monitoring and experimentation design |
-| 10 | Integration, validation and independent problem-solving | End-to-end run, testing, benchmarking, independent Python problems, debugging, code review | Working demo, consolidated benchmarks, final review |
+| 10 | Integration, validation and independent problem-solving | End-to-end run, testing, benchmarking, independent Python problems, debugging, code review | End-to-end recommendation demo, consolidated benchmarks, final review |
 
 ## 10. Daily deliverables and acceptance criteria
 
@@ -288,13 +309,13 @@ Each day ends with a merged pull request that meets the [definition of done](doc
 | 1 | Reproducible EDA script; data-quality checks (missing values, duplicates, label domain, hour range, unique values); CTR by device and category with counts; `reports/data_profile.md` with patterns, limitations, and a walkthrough of one end-to-end ad request | Both contributors reproduce the profile from one command, data-validation tests pass, and both can explain the ad-request lifecycle and why `clicked` and `converted` are not features |
 | 2 | Chunked CSV utility; streaming CTR aggregation; tests comparing streaming and in-memory results; memory/runtime notes | Streaming and in-memory CTRs match exactly for several chunk sizes, including chunk sizes that do not divide the row count, and bad input raises clear errors |
 | 3 | `src/train.py`; constant-rate baseline and logistic regression; saved artifact; short evaluation report (`reports/model_card.md`) | One command retrains with the same split and seed and gives the same metrics; preprocessing is fitted only on training data; the split method and leakage checks are documented |
-| 4 | Classification evaluation module (including F1 and calibration); top-K ranking; Precision@K, Recall@K and NDCG@K with hand-computed test cases; written comparison of classification vs ranking objectives | Metric functions match hand-worked examples, including one where good AUC coexists with poor ranking; ranking is deterministic; the candidate-set construction and its limitations are documented |
-| 5 | Behavioral feature pipeline; simulated offline (batch) and online (lookup) access; feature validation tests; architecture notes | Tests prove that events after the scoring time never affect features, and that offline and online paths return identical values for the same entity and timestamp |
-| 6 | FastAPI `GET /health` and `POST /rank`; API tests; `Dockerfile`; latency benchmark (`reports/latency.md`); scaling trade-off notes | API tests pass; the container builds and serves a request; p50/p95/p99 are **measured** with stated hardware, warm-up, and concurrency; invalid input returns 4xx, not 500 |
+| 4 | Classification evaluation module; ad catalog; candidate retrieval; eligibility filtering; CTR-based scoring; deterministic ranking; top-K `recommend()`; Precision@K, Recall@K, NDCG@K; labeled ranking fixtures; written comparison of objectives | `recommend()` returns a deterministic, eligible top-K; a stub-scorer test proves a highly scored ineligible ad is never returned; metric tests match hand-worked values; ranking metrics are reported only on labeled fixtures with the label source shown ([spec](docs/RECOMMENDER.md#5-day-4-engine-core-with-a-context-only-scorer)) |
+| 5 | Time-correct behavioral features; personalized scoring path; cold-start fallback; simulated offline/online access with consistency checks; architecture notes | Tests prove that events at or after the request time, including the current impression's own click and conversion, never affect features; offline and online features match; each cold-start case falls back; different histories can produce different rankings ([spec](docs/RECOMMENDER.md#6-day-5-personalization-cold-start-and-time-correct-features)) |
+| 6 | FastAPI `GET /health` and `POST /recommendations` (user context, `top_k`); response validation; integration tests; `Dockerfile`; latency benchmark (`reports/latency.md`); scaling trade-off notes | Integration tests pass and every output invariant holds; the container serves a valid response; p50/p95/p99 are **measured** for the cold-start and personalized paths; invalid input returns 4xx, not 500 ([spec](docs/RECOMMENDER.md#7-day-6-post-recommendations)) |
 | 7 | Small FP32 neural baseline; ONNX export; INT8 quantization experiment; FP32 vs optimized benchmark of size, latency, quality, and memory where practical (`reports/optimization.md`) | Export parity is within a stated tolerance; quantized quality is measured; results are reproducible; a missing speed-up is reported and explained ([criteria](docs/DAY7.md#acceptance-criteria)) |
 | 8 | Pruning experiment (unstructured and structured); teacher/student distillation experiment; combined benchmark summary; guidance on when each technique fits | Sparsity, quality, size, and latency are measured; the notes explain why dense zeros do not speed up inference; the rebuilt pruned model matches the masked one within tolerance; the students are compared with matched settings ([criteria](docs/DAY8.md#acceptance-criteria)) |
 | 9 | `docs/MLOPS.md` (deployment, monitoring and alerting, experimentation, privacy and guardrails); complete architecture diagram; scaling and failure-handling analysis in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Every alert has a metric, a threshold rationale, and an action; rollback is concrete; the A/B design states the unit, metrics, and sample-size reasoning; the diagrams match the code; every failure mode has detection and mitigation |
-| 10 | End-to-end demo; passing applicable tests; verified setup; consolidated benchmarks; architecture and trade-off report; independent problem-solving exercises | A fresh clone reaches a ranked API response by following only the README, and both contributors can independently solve small Python problems and debug an injected bug |
+| 10 | End-to-end demo; passing applicable tests; verified setup; consolidated benchmarks; architecture and trade-off report; independent problem-solving exercises | A fresh clone reaches recommendation responses for a known user, a cold-start user, and a filtered request by following only the README, with every stage shown (request → candidates → filtering → features → scoring → ranking → response). Both contributors can independently solve small Python problems and debug an injected bug ([spec](docs/RECOMMENDER.md#9-day-10-end-to-end-demonstration)) |
 
 ## 11. Testing strategy
 
@@ -304,10 +325,12 @@ Each day ends with a merged pull request that meets the [definition of done](doc
 | Data validation | Schema, nulls, duplicates, value domains | 🗓️ Day 1 |
 | Equivalence tests | Streaming vs in-memory results; offline vs online features | 🗓️ Days 2, 5 |
 | Leakage tests | Future events and post-outcome columns never reach features | 🗓️ Days 3, 5 |
-| Metric tests | Precision@K, NDCG@K, log loss against hand-computed values | 🗓️ Day 4 |
-| API tests | Valid and invalid requests, empty candidates, missing model | 🗓️ Day 6 |
+| Metric tests | Precision@K, Recall@K, NDCG@K, log loss against hand-computed values; unknown labels raise | 🗓️ Day 4 |
+| Recommender tests | Retrieval, eligibility (stub scorer cannot override rules), deterministic ranking, cold-start vs personalized path | 🗓️ Days 4–5 |
+| Ranking fixtures | Labeled synthetic candidate sets with explicit label source; unknown relevance is `null`, never 0 | 🗓️ Day 4 |
+| API integration tests | `POST /recommendations`: valid and invalid requests, output invariants, blocked categories, empty results | 🗓️ Day 6 |
 | Numerical parity | ONNX vs original predictions; rebuilt pruned model vs masked model | 🗓️ Days 7–8 |
-| End-to-end smoke test | Generate → train → serve → rank | 🗓️ Day 10 |
+| End-to-end smoke test | Train → serve → `POST /recommendations` → validated response | 🗓️ Day 10 |
 
 Principles:
 
@@ -331,7 +354,7 @@ See [CONTRIBUTING.md](docs/CONTRIBUTING.md#learning-method).
 Summary (details in [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md)):
 
 1. Keep `main` green; do not commit to it directly.
-2. Branch per task: `day3/train-pipeline`, `day6/rank-endpoint`, `docs/monitoring-design`.
+2. Branch per task: `day3/train-pipeline`, `day6/recommendations-endpoint`, `docs/monitoring-design`.
 3. Make small commits that each do one thing, with clear messages.
 4. Open a pull request with what changed, how it was tested, and its assumptions and limitations.
 5. The other contributor reviews, runs the tests locally, and should be able to explain the change before approving.
@@ -350,7 +373,7 @@ The project runs locally, but each day connects to a production concern:
 | Training-serving skew | One shared feature code path; the fitted preprocessing pipeline is saved with the model (Days 3, 5, 6) |
 | Latency | Measured p50/p95/p99 under stated load; batched scoring; the model is loaded once at startup (Day 6) |
 | Model efficiency | Quantization, pruning, and distillation measured against an FP32 baseline; distinguished from scaling replicas (Days 7–8) |
-| Reliability | Explicit handling of missing artifacts, empty candidates, and feature-store misses with defaults (Day 6) |
+| Reliability | Explicit handling of missing artifacts, no eligible ads, and feature-store misses via the cold-start path (Days 5–6) |
 | Model versioning | A version string stored with each artifact and returned by the API (Days 3, 6) |
 | Retraining and safe rollout | Retraining produces a candidate, not an automatic replacement; shadow, canary, champion/challenger, and A/B designs; rollback (Day 9, [retraining loop](docs/ARCHITECTURE.md#83-retraining-and-feedback-loops)) |
 | Monitoring | Service metrics, feature and prediction drift, delayed-label performance, model freshness, latency SLOs (Day 9) |
@@ -362,13 +385,14 @@ The project runs locally, but each day connects to a production concern:
 - Treat `user_id` as a pseudonymous identifier. In logs, record request IDs, model version, latency, and outcome, not raw user identifiers or full request payloads.
 - Never commit secrets, tokens, `.env` files, or credentials. `.gitignore` excludes common local files, but review `git diff --staged` before every commit.
 - Do not commit large binary model artifacts. `models/` is git-ignored, and artifacts should be reproducible from code and a seed.
-- Validate all API inputs and bound request sizes, such as the maximum number of candidates (Day 6).
+- Validate all API inputs and bound request sizes, such as the maximum `top_k` (Day 6).
 - Day 9 covers PII minimization, retention, access control, and consent considerations in more depth.
 
 ## 15. Project limitations
 
 - **Synthetic data:** click patterns are generated by simple rules, so metrics show learning on known patterns, not real-world performance.
-- **One candidate per request:** the logs record only the ad that was shown. Ranking metrics need constructed candidate sets, and offline ranking results cannot be read as unbiased estimates of online performance.
+- **One candidate per request:** the logs record only the ad that was shown. Unshown ads are unknown, not negative. Ranking metrics use labeled synthetic fixtures whose labels come from the generator's own rule, so they measure recovery of that rule, not real user preference. No offline result here is an unbiased estimate of online performance.
+- **Small hand-written catalog:** retrieval over about a dozen ads is structural practice. Real systems retrieve from thousands to millions of items.
 - **No economics:** there are no bids, budgets, pacing, or auctions. Ranking uses predicted CTR only.
 - **Local only:** the feature store is an in-process simulation, and nothing is deployed to cloud infrastructure.
 - **Small models:** the Day 7–8 networks are deliberately tiny so that the experiments fit in a day. Optimization techniques may show little or no latency gain at this size; the guides require such results to be measured and explained, not hidden.

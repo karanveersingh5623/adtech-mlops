@@ -6,6 +6,7 @@ Background reading:
 
 - For how a real ad request flows through publishers, exchanges, and ranking services, read the [AdTech fundamentals in Day 1](DAY1.md#part-1--adtech-fundamentals).
 - For the vocabulary used on Days 3–9, read [Core ML system concepts](#8-core-ml-system-concepts): training vs inference vs serving vs evaluation, model size vs data volume, and retraining loops.
+- For the central deliverable, read the [Recommendation Engine Specification](RECOMMENDER.md): interfaces, the API contract, and the evaluation fixtures.
 
 Status markers: ✅ implemented · 🗓️ planned · ➕ optional.
 
@@ -49,10 +50,11 @@ flowchart TB
         ONNX["Optimization: ONNX, quantization,<br/>pruning, distillation<br/>Days 7–8"]
     end
 
-    subgraph Online["Online path (request time)"]
-        API["FastAPI /rank<br/>Day 6"]
+    subgraph Online["Online path: recommendation engine (request time)"]
+        API["FastAPI POST /recommendations<br/>Day 6"]
+        CAT[("Ad catalog<br/>Day 4")]
+        RANK["Retrieve → filter → score → rank top-K<br/>recommender.py, Days 4–5"]
         FON[("Online feature store<br/>in-memory dict<br/>Day 5")]
-        RANK["Score and top-K<br/>Day 4"]
     end
 
     subgraph Ops["Operations (Day 9)"]
@@ -66,27 +68,36 @@ flowchart TB
     TRAIN --> EVAL
     TRAIN --> REG --> ONNX
     REG --> RANK
-    API --> FON
+    CAT --> RANK
+    FON --> RANK
     API --> RANK
     API --> LOG --> MON
 ```
 
-### Request flow for `POST /rank` 🗓️
+### Request flow for `POST /recommendations` 🗓️
+
+The full contract is in [RECOMMENDER.md](RECOMMENDER.md#7-day-6-post-recommendations).
 
 ```mermaid
 sequenceDiagram
     participant C as Client
     participant A as FastAPI
+    participant R as recommend()
+    participant K as Ad catalog
     participant F as Online feature store
-    participant M as Model (loaded at startup)
-    C->>A: POST /rank {user_id, device, hour, candidates[], k}
-    A->>A: Validate (Pydantic, bounds on candidates and k)
-    A->>F: get_online_features(user_id)
-    F-->>A: features or defaults (miss)
-    A->>M: predict_proba(context x candidates)
-    M-->>A: scores
-    A->>A: Sort by score, stable tie-break, take top-k
-    A-->>C: ranked candidates, scores, model_version
+    participant M as Scorer (loaded at startup)
+    C->>A: POST /recommendations {user_id?, context, top_k}
+    A->>A: Validate request (Pydantic, bounds)
+    A->>R: recommend(context, top_k)
+    R->>K: retrieve candidates
+    R->>R: eligibility filter (hard rules)
+    R->>F: user features as of request_time
+    F-->>R: features, or miss → cold-start path
+    R->>M: score(context, eligible candidates) in one batch
+    M-->>R: one CTR per candidate
+    R->>R: rank: score desc, tie-break ad_id, top-K
+    R-->>A: items, scoring_path, diagnostics
+    A-->>C: validated response + model_version
 ```
 
 ## 3. Components and planned modules
@@ -98,9 +109,13 @@ sequenceDiagram
 | Streaming 🗓️ | `src/streaming.py` | Constant-memory aggregation | Equal to the in-memory result |
 | Training 🗓️ | `src/train.py` | Split, preprocess, fit, save artifact and metadata | Preprocessing fitted on training data only |
 | Evaluation 🗓️ | `src/evaluate.py` | Classification metrics vs baseline | Always reported with split description |
-| Ranking 🗓️ | `src/ranking.py` | Top-K, Precision@K, NDCG@K | Deterministic order |
-| Features 🗓️ | `src/features.py`, `src/feature_store.py` | Point-in-time features; offline and online access | No future events; offline equals online |
-| Serving 🗓️ | `src/api.py` | HTTP validation, scoring, response | 4xx for bad input; model loaded once |
+| Catalog and retrieval 🗓️ | `src/catalog.py`, `src/retrieval.py` | Load the ad catalog; return bounded candidates | Only catalog ads; deterministic |
+| Eligibility 🗓️ | `src/eligibility.py` | Hard rules: status, device, schedule, blocked categories | No score overrides a rule |
+| Scoring 🗓️ | `src/scoring.py` | Context-only (Day 4) and personalized (Day 5) scorers | One probability per candidate, one batched call |
+| Ranking 🗓️ | `src/ranking.py`, `src/ranking_metrics.py` | Top-K; Precision@K, Recall@K, NDCG@K | Deterministic order; unknown labels raise |
+| Recommender 🗓️ | `src/recommender.py` | Orchestrates retrieve → filter → features → score → rank | Returns only eligible ads; reports scoring path |
+| Features 🗓️ | `src/features.py`, `src/feature_store.py` | Point-in-time features; offline and online access | No events at or after request time; offline equals online |
+| Serving 🗓️ | `src/api.py` | `POST /recommendations`: request and response validation | 4xx for bad input; output invariants hold; model loaded once |
 | Benchmark 🗓️ | `src/benchmark.py` | p50/p95/p99, throughput | Numbers reported with conditions |
 | Optimization 🗓️ | `src/nn_model.py`, `src/optimize.py` | Small neural baseline; ONNX export, quantization (Day 7); pruning, distillation (Day 8) | Quality and parity measured against the FP32 baseline |
 
@@ -120,7 +135,7 @@ sequenceDiagram
 The project simulates the two halves of a feature store:
 
 - **Offline store:** historical feature values with timestamps, used to build training sets by point-in-time (as-of) joins, so that each training row only sees events strictly before its impression time.
-- **Online store:** the latest feature values per entity, kept in memory for low-latency lookup at request time, with defaults for unknown entities.
+- **Online store:** the latest feature values per entity, materialized as of a recorded time and kept in memory for low-latency lookup at request time. Unknown entities are reported as misses, and the recommender sends them to the [cold-start path](RECOMMENDER.md#63-cold-start-fallback).
 
 ```mermaid
 flowchart LR
@@ -128,7 +143,7 @@ flowchart LR
     FN --> OFF[("Offline table<br/>entity, as_of_time, values")]
     FN --> ON[("Online dict<br/>entity → latest values")]
     OFF -- as-of join --> TRAIN["Training set"]
-    ON -- lookup --> API["/rank"]
+    ON -- lookup --> API["recommend() via<br/>POST /recommendations"]
 ```
 
 **What a production feature store adds** and why this project leaves each one out:
@@ -148,7 +163,7 @@ This project covers the core correctness ideas (point-in-time joins, parity, fre
 | Component | Failure | Impact | Planned mitigation |
 |---|---|---|---|
 | Model artifact | Missing or corrupt at startup | Service cannot score | Fail health check at startup; keep the previous version for rollback |
-| Online features | Unknown user or store unavailable | Lower-quality scores | Fall back to default feature values; count misses as a metric |
+| Online features | Unknown user or store unavailable | Lower-quality scores | Fall back to the context-only cold-start scorer; count misses as a metric |
 | Input | Malformed or oversized request | Errors, latency spikes | Pydantic validation; maximum candidate count; 4xx responses |
 | Data | Schema change, bad labels | Silent model degradation | Validation before training; drift monitoring (Day 9) |
 | Latency | Slow inference or many candidates | Missed request deadlines | Benchmark p99; bound candidates; optimize the model (Days 7–8); scale replicas for throughput |
