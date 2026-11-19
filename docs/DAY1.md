@@ -1,4 +1,6 @@
-# Day 1 — Ad impression data and the prediction problem
+# Day 1 — Python, Pandas and Data Exploration
+
+Guided exercise for [Day 1 of the roadmap](ROADMAP.md#day-1--python-pandas-and-data-exploration). Starter code: [explore_data.py](../explore_data.py). Run everything from the repository root after following the [setup steps](../README.md#7-installation-and-setup).
 
 ## The prediction question
 
@@ -42,10 +44,50 @@ print(df['clicked'].value_counts())
 # YOUR TASK: calculate CTR and print it (as a percentage).
 ```
 
+## Data-quality checks
+
+Turn each check into a function and later into a test (`src/data_validation.py`, `tests/test_data_validation.py`):
+
+| Check | Pandas starting point |
+|---|---|
+| Missing values per column | `df.isna().sum()` |
+| Duplicate impression IDs | `df["request_id"].duplicated().sum()` |
+| Duplicate event IDs | `events["event_id"].duplicated().sum()` |
+| Label domain | `df["clicked"].isin([0, 1]).all()` (same for `converted`) |
+| Hour range and consistency | `df["hour"].between(0, 23)`, and compare with `pd.to_datetime(df["event_time"], utc=True).dt.hour` |
+| Unique values | `df.nunique()`, `df["device"].unique()`, `df["ad_category"].value_counts()` |
+| Cross-file consistency | every `click` event's `request_id` has `clicked == 1` in the impressions file |
+| Conversion rule | no row has `converted == 1` and `clicked == 0` |
+
+## CTR breakdowns
+
+Always report the **count** next to a rate. A CTR computed from a handful of impressions is noise.
+
+```python
+summary = (
+    df.groupby("device")["clicked"]
+      .agg(impressions="count", clicks="sum", ctr="mean")
+      .sort_values("ctr", ascending=False)
+)
+print(summary)
+```
+
+Repeat the breakdown for `ad_category` and `hour`. Then filter and sort, for example to show the evening hours (18–22) or the categories with the highest CTR on mobile.
+
+**Interpreting differences.** Approximate a 95% confidence interval for a CTR *p* over *n* impressions as *p* ± 1.96·√(*p*(1−*p*)/*n*). If two groups' intervals overlap heavily, do not claim a difference.
+
+## Deliverables
+
+- [ ] `explore_data.py` (or a new script) prints the profile and the CTR breakdowns reproducibly
+- [ ] Data-quality checks as functions, with tests
+- [ ] `reports/data_profile.md`: class balance, CTR tables with counts, observed patterns, and limitations (synthetic data, no causal claims)
+
 ## Questions to answer before Day 2
 
 1. What is an impression? What is a click? What is CTR?
 2. What is the target variable? Which columns would leak future information into the model?
 3. If only 10% of impressions are clicked, why might a model predicting 'no click' on every row have misleadingly high accuracy?
+4. Which observed CTR differences are larger than you would expect from chance, given the counts?
+5. The generator gives each user a hidden preferred category. Which of the columns available today could reveal it, and which feature would you need to build (Day 5)?
 
 Do not train a model yet. We begin model selection only after the problem, features and baseline are clear.
