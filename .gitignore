@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Virtual environments
+.venv/
+venv/
+
+# Local secrets and editor/OS files
+.env
+.DS_Store
+
+# Local model artifacts (reproducible from code and seed)
+models/
+*.onnx
+*.joblib

@@ -1,472 +1,369 @@
-# AdTech ML — 7-Day End-to-End Capstone
+# AdTech MLOps — 10-Day End-to-End Learning Project
 
-Build, test, explain, and demonstrate a small **contextual advertising and recommendation system** in seven days. This repository is designed for **two developers learning together**, with approximately **2–4 hours per person per day** (target: 3 hours/day).
+A structured, hands-on project in which **two engineers learn together** by building a small advertising machine-learning system from raw events to a tested, benchmarked prediction service. Over ten days it covers advertising data processing, click-through-rate (CTR) prediction, ranking, feature engineering, online inference, model optimization, monitoring, and production reliability.
 
-The outcome is **one connected, runnable application**, not seven unrelated notebooks: impression and behavioral data → validation and features → click-through-rate (CTR) prediction → candidate filtering and ranking → HTTP API → tests, latency measurements, and a monitoring plan.
-
-> **Project status:** Learning scaffold. The deterministic synthetic-data generator, example CSV files, and generator tests are included. Training, ranking, audience filtering, serving, and monitoring are intentionally **not implemented yet**. The daily deliverables below define what the contributors will build.
+> **Project status — read this first.** This repository is a **learning scaffold at the start of Day 1**. What exists today is a deterministic synthetic-data generator, two generated CSV datasets, a Day 1 exploration starter, and generator tests. **There is no trained model, ranking module, feature store, API, Docker image, or monitoring system yet.** Those are the deliverables of the roadmap below, and every section of this README marks items as ✅ *implemented*, 🗓️ *planned*, or ➕ *optional*.
 >
-> **Scope:** Educational prototype, not a production advertising platform. All included user IDs and events are synthetic. No production performance, revenue uplift, or causal business improvement is claimed.
+> **Scope:** Educational prototype, not a production advertising platform. All user IDs and events are synthetic. No production performance, revenue uplift, or causal business effect is claimed.
 
 ## Table of contents
 
-1. [Project goal and success criteria](#project-goal-and-success-criteria)
-2. [System overview](#system-overview)
-3. [Tech stack and scope](#tech-stack-and-scope)
-4. [Repository structure](#repository-structure)
-5. [Quick start](#quick-start)
-6. [Data dictionary and modeling rules](#data-dictionary-and-modeling-rules)
-7. [Seven-day roadmap](#seven-day-roadmap)
-8. [Working together](#working-together)
-9. [Quality gates and definition of done](#quality-gates-and-definition-of-done)
-10. [Evaluation and performance](#evaluation-and-performance)
-11. [Risks, limitations, and stretch goals](#risks-limitations-and-stretch-goals)
-12. [Final demonstration](#final-demonstration)
+1. [Project overview and objectives](#1-project-overview-and-objectives)
+2. [What the system does](#2-what-the-system-does)
+3. [High-level architecture](#3-high-level-architecture)
+4. [Technology stack](#4-technology-stack)
+5. [Datasets](#5-datasets)
+6. [Repository structure](#6-repository-structure)
+7. [Installation and setup](#7-installation-and-setup)
+8. [How to run the existing code](#8-how-to-run-the-existing-code)
+9. [10-day roadmap](#9-10-day-roadmap)
+10. [Daily deliverables and acceptance criteria](#10-daily-deliverables-and-acceptance-criteria)
+11. [Testing strategy](#11-testing-strategy)
+12. [Collaboration and Git workflow](#12-collaboration-and-git-workflow)
+13. [Production ML considerations](#13-production-ml-considerations)
+14. [Privacy and security](#14-privacy-and-security)
+15. [Project limitations](#15-project-limitations)
+16. [Future improvements](#16-future-improvements)
 
-## Project goal and success criteria
+Further documentation:
 
-**Scenario:** A content site has several eligible advertisements. Given impression-time context, estimate the likelihood that a user will click each candidate and return a ranked list. Build a small behavioral-event pipeline to illustrate how recent interactions can inform audience eligibility.
+| Document | Purpose |
+|---|---|
+| [docs/ROADMAP.md](docs/ROADMAP.md) | Full day-by-day plan: topics, implementation steps, discussion questions |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Current and target architecture, data flow, design trade-offs (Mermaid diagrams) |
+| [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) | Branching, commits, pull requests, review checklist, definition of done |
+| [docs/DAY1.md](docs/DAY1.md) | Guided Day 1 exercise |
 
-By the end of Day 7, we aim to demonstrate:
+## 1. Project overview and objectives
 
-- [ ] A validated, reproducible dataset and documented feature/label definitions.
-- [ ] A constant-probability baseline and a trained CTR classifier.
-- [ ] Held-out evaluation with metrics appropriate for imbalanced clicks.
-- [ ] Deterministic top-*K* ranking of **eligible** ad candidates.
-- [ ] A minimal behavioral-event aggregation and audience-eligibility component using **past events only**.
-- [ ] A locally runnable `POST /rank` API with input validation and model version.
-- [ ] Unit tests, integration tests, and reproducible setup commands.
-- [ ] Measured local inference/API latency, plus documented monitoring and retraining strategy.
-- [ ] A joint demo in which **both contributors can explain and modify the code**.
+**Scenario.** A content site has several eligible advertisements for each page view. Given the context available at request time (user, device, hour, recent behavior), the system estimates the probability that the user clicks each candidate ad and returns a ranked list, quickly and reliably.
 
-**Completion standard:** A passing test suite and a live demo are required. Merely training a model in a notebook is not sufficient.
+By the end of Day 10 the project aims to demonstrate:
 
-## System overview
+- [ ] Reproducible data exploration and data-quality checks (Day 1)
+- [ ] Memory-efficient, streaming data processing that matches in-memory results (Day 2)
+- [ ] A reproducible CTR training pipeline with a saved model artifact and a baseline comparison (Day 3)
+- [ ] Classification and ranking evaluation, including Precision@K and NDCG@K (Day 4)
+- [ ] Point-in-time-correct behavioral features with simulated offline and online access (Day 5)
+- [ ] A tested FastAPI ranking service in Docker with measured p50/p95/p99 latency (Day 6)
+- [ ] One measured model-optimization experiment, such as ONNX Runtime inference (Day 7)
+- [ ] Documented deployment, monitoring, rollback, A/B testing, and privacy strategy (Day 8)
+- [ ] End-to-end system architecture with scaling and failure analysis (Day 9)
+- [ ] A working end-to-end demo from a fresh checkout with all tests passing (Day 10)
 
-```text
-Historical ad impressions                User behavior events
-         |                                      |
-         v                                      v
-  Validate + explore                     Validate + aggregate
-         |                                      |
-         v                                      v
-  Feature preparation                 Past-only behavior features
-         |                                      |
-         v                                      v
-  Train CTR classifier                 Audience-eligibility rules
-         |                                      |
-         v                                      |
-  Evaluate + save model                          |
-         |                                      |
-         +----------------+---------------------+
-                          |
-              Candidate ad requests
-                          |
-                 Filter eligible ads
-                          |
-                 Model CTR scoring
-                          |
-                   Top-K ranking
-                          |
-                    FastAPI /rank
-                          |
-             Tests + latency + metrics
+**Learning objective.** Both contributors should be able to build, debug, test, and explain **every** major component, not only the parts they wrote.
+
+## 2. What the system does
+
+| Capability | Status | Day |
+|---|---|---|
+| Generate deterministic synthetic impressions and behavior events | ✅ Implemented ([src/generate_synthetic.py](src/generate_synthetic.py)) | — |
+| Print basic dataset shape and click-label counts | ✅ Implemented (starter, [explore_data.py](explore_data.py)) | 1 |
+| Data-quality checks and CTR breakdowns | 🗓️ Planned | 1 |
+| Chunked/streaming CSV aggregation | 🗓️ Planned | 2 |
+| Logistic-regression CTR model, saved artifact | 🗓️ Planned | 3 |
+| Classification metrics, top-K ranking, ranking metrics | 🗓️ Planned | 4 |
+| Behavioral features, local offline/online feature store | 🗓️ Planned | 5 |
+| FastAPI `/health` and `/rank`, Docker, latency benchmark | 🗓️ Planned | 6 |
+| ONNX export and ONNX Runtime benchmark | 🗓️ Planned | 7 |
+| Drift metric (e.g., PSI) script | ➕ Optional | 8 |
+| Production-readiness, monitoring and rollback design | 🗓️ Planned (documentation) | 8 |
+| End-to-end architecture and capacity notes | 🗓️ Planned (documentation) | 9 |
+| End-to-end demo script, CI on pull requests | 🗓️ Planned / ➕ optional CI | 10 |
+
+**Key distinctions used throughout the project:**
+
+- **CTR prediction** estimates the probability that one impression is clicked.
+- **Ranking** orders several eligible candidates for one request. Here it ranks by predicted CTR. Real systems also weigh bids, budgets, pacing, and policy constraints, which are out of scope.
+- **Conversion** is a later outcome. The `converted` column exists in the data, but it is never an input to an impression-time CTR model.
+
+## 3. High-level architecture
+
+The target system at the end of the roadmap is shown below. **Only the data generator and CSV files exist today.** See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for component details and trade-offs.
+
+```mermaid
+flowchart LR
+    GEN["Synthetic generator ✅"] --> IMP[("ad_impressions.csv ✅")]
+    GEN --> EVT[("behavior_events.csv ✅")]
+
+    subgraph Offline["Offline (batch)"]
+        IMP --> VAL["Validation and EDA (Day 1)"]
+        EVT --> STREAM["Chunked aggregation (Day 2)"]
+        STREAM --> FEAT["Point-in-time features (Day 5)"]
+        VAL --> TRAIN["Train CTR model (Day 3)"]
+        FEAT --> TRAIN
+        TRAIN --> EVAL["Evaluate and rank metrics (Day 4)"]
+        TRAIN --> ART[("Model artifact")]
+        ART --> OPT["ONNX optimization (Day 7)"]
+    end
+
+    subgraph Online["Online (serving)"]
+        REQ(["POST /rank"]) --> API["FastAPI service (Day 6)"]
+        API --> FS[("Online feature lookup (Day 5)")]
+        API --> SCORE["Score and top-K"]
+        ART --> SCORE
+    end
+
+    FEAT --> FS
+    API --> MON["Logs, metrics, drift checks (Day 8)"]
 ```
 
-**Important distinctions:**
+## 4. Technology stack
 
-- **CTR prediction** estimates the chance of a click on an impression.
-- **Audience eligibility** identifies which audiences or categories a user may qualify for based on historical behavior. The first implementation is **rule-based**, not a separate trained conversion model.
-- **Ranking** sorts eligible candidates by predicted click probability. A real advertising platform might additionally account for bids, budgets, pacing, eligibility, fairness, and expected revenue; those are outside the core one-week implementation.
-- **Conversion prediction** is different from predicting clicks. The `converted` column exists in our synthetic data, but it is **not** a feature for the impression-time CTR model.
-
-## Tech stack and scope
-
-| Layer | Core choice | Why |
+| Layer | Choice | Status |
 |---|---|---|
-| Language | Python 3.10+ | Practical data/ML/service development |
-| Data handling | Pandas, NumPy | Tabular transformations and validation |
-| Models | scikit-learn logistic regression | Explainable, fast baseline and preprocessing pipeline |
-| Optional model | PyTorch | Small neural classifier for comparison, **only after the baseline works** |
-| API | FastAPI, Pydantic, Uvicorn | Typed HTTP requests and model serving |
-| Tests | `unittest` (already present); optional `pytest` | Reproducibility, validation, API and ranking checks |
-| Packaging | Docker (optional if time permits) | Reproducible local runtime |
-| Collaboration | Git, GitHub, pull requests | Reviewable changes and shared ownership |
-| Performance | Python timers / local load script | Measured p50/p95 latency and throughput under stated conditions |
+| Language | Python 3.10+ | ✅ (tested locally on Python 3.15) |
+| Data | Pandas | ✅ in [requirements-day1.txt](requirements-day1.txt) |
+| Data | NumPy | 🗓️ Day 1–2 (installed with Pandas) |
+| Modeling | scikit-learn (logistic regression, pipelines), joblib | 🗓️ Day 3 |
+| Serving | FastAPI, Pydantic, Uvicorn, httpx (test client) | 🗓️ Day 6 |
+| Packaging | Docker | 🗓️ Day 6 |
+| Optimization | ONNX, skl2onnx, ONNX Runtime | 🗓️ Day 7 |
+| Testing | `unittest` (current); `pytest` optional | ✅ / ➕ |
+| Collaboration | Git, GitHub pull requests | ✅ |
+| CI | GitHub Actions running tests on pull requests | ➕ Day 10 |
 
-**Not required for the seven-day MVP:** Kafka cluster, Kubernetes cluster, cloud deployment, hosted feature store, distributed training, real-time bidding infrastructure, real A/B experiment, or production GPU serving. We will discuss where they would fit without making them prerequisites.
+**Out of scope on purpose:** Kafka, Spark, Kubernetes, hosted feature stores, cloud deployment, distributed training, and GPU serving. The architecture documents explain where they would fit, but none of them is needed to finish the roadmap.
 
-## Repository structure
+Add new dependencies only when the day that needs them begins, and record them in a consolidated `requirements.txt` (🗓️ to be created on Day 3).
 
-### Currently included
+## 5. Datasets
+
+Both files are **synthetic**, produced by [src/generate_synthetic.py](src/generate_synthetic.py) with `--users 300 --impressions 15000 --seed 42`. The committed files reproduce byte-for-byte with that command. They contain 15,000 impressions, 16,832 behavior events, and 300 users. Timestamps run from 2026-01-01 to about 2026-01-21 UTC, one impression every two minutes.
+
+### `data/ad_impressions.csv`: one row per ad impression
+
+| Column | Meaning | CTR modeling guidance |
+|---|---|---|
+| `request_id` | Unique impression identifier | Integrity and deduplication only, **not** a feature |
+| `event_time` | UTC impression timestamp (ISO 8601) | Use for time-based splits and serving-time features |
+| `user_id` | Synthetic user identifier | Avoid raw high-cardinality IDs in the baseline; use for user-level features |
+| `ad_id` | Ad identifier (`ad_1`–`ad_4`, one per category) | Redundant with `ad_category` in this generator |
+| `ad_category` | `finance`, `sports`, `shopping`, `travel` | Initial feature |
+| `device` | `desktop` or `mobile` | Initial feature |
+| `hour` | UTC hour, 0–23 | Initial feature |
+| `clicked` | 0/1 observed click | **Target**, never an input |
+| `converted` | 0/1 later conversion | **Never** an input to impression-time CTR prediction (leakage) |
+
+### `data/behavior_events.csv`: event log
+
+| Column | Meaning |
+|---|---|
+| `event_id` | Unique event identifier (suffix `_i`, `_c`, `_v`) |
+| `event_time` | UTC timestamp. A click comes 5 s and a conversion 45 s after its impression |
+| `request_id` | Links the event back to an impression |
+| `user_id`, `ad_id`, `category` | Same meaning as above |
+| `event_type` | `impression`, `click`, or `conversion` |
+
+### Generator assumptions and modeling rules
+
+- Each user has one hidden preferred category. Clicks are much more likely when the ad category matches it, and slightly more likely between 18:00 and 22:59 UTC. Device has **no** generated effect.
+- **Each `request_id` has exactly one candidate ad.** Multi-candidate ranking evaluation therefore needs constructed candidate sets. See [Day 4](docs/ROADMAP.md#day-4--model-evaluation-and-ranking).
+- A conversion can only follow a click in this generator. That is not a universal attribution rule.
+- **Time rule:** a prediction at time *t* may use only information available at or before *t*. Later clicks and conversions are labels, never features for the same prediction.
+- If a label is missing in a future dataset, investigate it and report any excluded rows. Do not silently treat it as 0.
+- The patterns are intentionally simple and learnable. Good metrics on this data **do not** demonstrate real-world performance.
+
+## 6. Repository structure
+
+### Current files ✅
 
 ```text
-adtech_7_day_capstone/
-├── README.md                     # This plan
+adtech-mlops/
+├── README.md                       # This document
+├── .gitignore                      # Virtualenvs, caches, local model artifacts
 ├── docs/
-│   └── DAY1.md                   # Day 1 guided exercise
+│   ├── ROADMAP.md                  # Detailed 10-day plan
+│   ├── ARCHITECTURE.md             # Current and target architecture
+│   ├── CONTRIBUTING.md             # Collaboration and Git workflow
+│   └── DAY1.md                     # Day 1 guided exercise
 ├── data/
-│   ├── ad_impressions.csv        # Generated synthetic impression rows
-│   └── behavior_events.csv       # Generated synthetic activity events
+│   ├── ad_impressions.csv          # Synthetic impressions (generated)
+│   └── behavior_events.csv         # Synthetic behavior events (generated)
 ├── src/
 │   ├── __init__.py
-│   └── generate_synthetic.py     # Deterministic dataset generator
+│   └── generate_synthetic.py       # Deterministic dataset generator
 ├── tests/
-│   └── test_generate_synthetic.py
-├── explore_data.py              # Day 1 exercise starter
-├── requirements-day1.txt        # Initial data dependency
-└── .gitignore
+│   └── test_generate_synthetic.py  # Generator determinism and validity tests
+├── explore_data.py                 # Day 1 exploration starter (contains a TODO)
+└── requirements-day1.txt           # Pandas
 ```
 
-### Suggested structure to create during the week
+### Planned additions 🗓️
+
+These are **plans, not existing files**. Names may change during implementation.
 
 ```text
 src/
-├── data_validation.py          # Day 1
-├── features.py                 # Days 1–2
-├── train.py                    # Day 2
-├── evaluate.py                 # Day 2
-├── ranking.py                  # Day 3
-├── audiences.py                # Day 4
-├── api.py                      # Day 5
-└── benchmark.py                # Day 6
-models/                          # Local artifacts; avoid committing large binaries
-reports/
-├── data_profile.md
-├── model_card.md
-└── latency.md
-tests/
-├── test_data_validation.py
-├── test_features.py
-├── test_ranking.py
-├── test_audiences.py
-└── test_api.py
-Dockerfile                       # Optional Day 5/6 deliverable
-requirements.txt                 # Consolidate as packages are introduced
+├── data_validation.py     # Day 1   data-quality checks
+├── streaming.py           # Day 2   chunked CSV processing and streaming CTR
+├── train.py               # Day 3   training pipeline
+├── evaluate.py            # Day 4   classification metrics
+├── ranking.py             # Day 4   candidate scoring, top-K, Precision@K, NDCG@K
+├── features.py            # Day 5   behavioral feature computation
+├── feature_store.py       # Day 5   local offline/online feature access
+├── api.py                 # Day 6   FastAPI service
+├── benchmark.py           # Day 6/7 latency benchmarks
+└── optimize.py            # Day 7   ONNX export and comparison
+tests/                     # test_<module>.py for each module above
+reports/                   # data_profile.md, model_card.md, latency.md, optimization.md
+docs/MLOPS.md              # Day 8   production-readiness, monitoring, rollout design
+models/                    # Local artifacts (git-ignored)
+requirements.txt           # Consolidated dependencies (from Day 3)
+Dockerfile                 # Day 6
 ```
 
-Names under **suggested structure** are a plan, not existing files. Do not expect them to run until they have been implemented.
+## 7. Installation and setup
 
-## Quick start
-
-### 1. Clone or extract
-
-After pushing this project to GitHub:
+Requirements: Git and Python 3.10 or newer. Docker is needed only from Day 6.
 
 ```bash
-git clone <YOUR_REPOSITORY_URL>
-cd adtech_7_day_capstone
-```
+git clone https://github.com/karanveersingh5623/adtech-mlops.git
+cd adtech-mlops
 
-If you have the downloaded starter ZIP instead, extract it and open the `adtech_7_day_capstone` folder in your editor.
-
-### 2. Create an environment
-
-```bash
 python3 -m venv .venv
-source .venv/bin/activate       # macOS/Linux
+source .venv/bin/activate            # Windows PowerShell: .venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
 python -m pip install -r requirements-day1.txt
 ```
 
-Windows PowerShell activation: `.venv\Scripts\Activate.ps1`.
+Run all commands **from the repository root**. `explore_data.py` uses the relative path `data/ad_impressions.csv`.
 
-### 3. Generate the sample data
+**VS Code tip:** open the repository root as the workspace, or set `"cwd": "${workspaceFolder}"` in `.vscode/launch.json`. For robust paths in new scripts, use `Path(__file__).resolve().parent / "data" / "ad_impressions.csv"`.
 
-```bash
-python -m src.generate_synthetic \
-  --out data --users 300 --impressions 15000 --seed 42
-```
-
-This creates `data/ad_impressions.csv` and `data/behavior_events.csv`. Sample copies are already included in the starter archive. The script is deterministic for a fixed seed and arguments.
-
-### 4. Run the existing tests
+## 8. How to run the existing code
 
 ```bash
+# Run the generator tests (standard library only, no Pandas needed)
 python -m unittest discover -s tests -v
-```
 
-### 5. Begin Day 1
+# Regenerate the datasets. They are already committed; this reproduces them exactly.
+python -m src.generate_synthetic --out data --users 300 --impressions 15000 --seed 42
 
-```bash
+# Day 1 starter: prints shape, first rows, and click-label counts (needs Pandas)
 python explore_data.py
 ```
 
-**VS Code debugger tip:** Open the project directory as the workspace, or set `"cwd": "${workspaceFolder}"` in `.vscode/launch.json`. Relative CSV paths are resolved from the process working directory, not automatically from the script location. For more robust file loading, use `Path(__file__).resolve().parent / "data" / "ad_impressions.csv"` in a root-level script.
+To experiment without overwriting the committed data, generate into another directory, for example `--out /tmp/adtech-data`. **Do not change the generator or the committed datasets** without a pull request that explains why, because every later day depends on them.
 
-## Data dictionary and modeling rules
+## 9. 10-day roadmap
 
-### `data/ad_impressions.csv`
+**Time budget:** about 3 hours per person per day: roughly 45 minutes learning, 90 minutes building, and 45 minutes testing and review. When time is short, finish the required deliverable and skip optional work.
 
-| Column | Meaning | CTR modeling guidance |
-|---|---|---|
-| `request_id` | Unique impression identifier | Use for integrity/deduplication, **not** a predictive feature |
-| `event_time` | UTC impression timestamp | May derive time features available at request time |
-| `user_id` | Synthetic user identifier | Avoid raw high-cardinality ID in the first baseline |
-| `ad_id` | Candidate ad identifier | Optional later feature; avoid fitting on accidental ID patterns |
-| `ad_category` | Candidate ad category | Initial feature |
-| `device` | Mobile or desktop | Initial feature |
-| `hour` | UTC hour, 0–23 | Initial feature |
-| `clicked` | 0 or 1 observed click outcome | **Target**, never an input feature |
-| `converted` | 0 or 1 later conversion outcome | **Never** input to impression-time CTR prediction |
+The full plan with implementation steps and discussion questions is in **[docs/ROADMAP.md](docs/ROADMAP.md)**.
 
-### `data/behavior_events.csv`
-
-Fields include `event_id`, `event_time`, `request_id`, `user_id`, `ad_id`, `category`, and `event_type` (`impression`, `click`, or `conversion`).
-
-**Time rule:** A prediction at time *t* may only use information known **before or at t**. A user's later click or conversion may be used as a training label after it becomes available, but cannot be included as an input feature for that same historical prediction.
-
-**Synthetic generator assumptions:**
-
-- Four ad categories: finance, sports, shopping, travel.
-- Two devices: desktop and mobile.
-- User preferences, matching categories, and hour influence generated click probabilities.
-- Conversion can occur only after a click **in this generator**; this is not a universal rule for real advertising attribution.
-- The data is intentionally simple and learnable. Performance on it does **not** demonstrate real-world production performance.
-- If `clicked` is missing, don't silently count it as zero. Investigate the missing label, exclude invalid rows from evaluated labeled samples where appropriate, and report the exclusion.
-
-## Seven-day roadmap
-
-**Time budget:** Each person targets 45 minutes learning, 90 minutes coding, and 45 minutes validation/review per day. If only two hours are available, prioritize the **required deliverable** and skip optional enhancements.
-
-### Day 1 — Understand the data and define the prediction problem
-
-**Learn:** impressions, clicks, conversions, CTR; supervised learning; features versus target; Python/Pandas DataFrames; data types; missing values; duplicate IDs; leakage and class imbalance.
-
-**Implement:**
-
-1. Generate/read both CSV files.
-2. Inspect `shape`, `head`, `dtypes`, missing counts, unique users, duplicate `request_id` values, label values and hour range.
-3. Calculate overall CTR and CTR by device and ad category, including impression counts.
-4. Decide which columns are safe to use for a prediction at impression time.
-5. Write down data limitations and a baseline hypothesis.
-
-**Required deliverable:** An executable data-profiling script or notebook, a short `reports/data_profile.md`, and basic data-validation tests.
-
-**Think and discuss:** Does higher historical CTR for a category mean the category causes more clicks? What happens when a click label is missing? Why is `converted` leakage for CTR prediction?
-
-**Day 1 done when:** Both collaborators can reproduce the data profile and explain the chosen features and target without reading code aloud.
-
-### Day 2 — Train and evaluate a simple CTR model
-
-**Learn:** binary classification, logistic regression, probabilities, preprocessing, categorical encoding, train/validation/test splits, overfitting, log loss, ROC-AUC and PR-AUC.
-
-**Implement:**
-
-1. Define a trivial baseline (predict the training click rate).
-2. Split data reproducibly; ensure preprocessing is fitted **only on training data**.
-3. Train a scikit-learn `Pipeline` with imputation/encoding as needed and logistic regression.
-4. Evaluate against baseline on held-out data; save evaluation results and the fitted pipeline.
-5. Verify that unseen categorical values can be processed at prediction time.
-
-**Required deliverable:** `src/train.py`, `src/evaluate.py`, saved local model artifact, `reports/model_card.md` with actual measured metrics, and focused tests.
-
-**Think and discuss:** Why can accuracy be misleading when most impressions are not clicked? Why choose log loss for predicted probabilities? If rows share users or chronology, what could make a random split optimistic? Keep split limitations explicit.
-
-**Day 2 done when:** One command trains the pipeline, another reproduces its held-out evaluation, and the report compares baseline versus trained model.
-
-### Day 3 — Turn probabilities into an ad ranking
-
-**Learn:** classification versus ranking, top-*K*, eligibility constraints, tie-breaking, probability calibration, ranking metrics and candidate-set assumptions.
-
-**Implement:**
-
-1. Define a small input schema describing context and candidate ads.
-2. Implement candidate filtering (e.g., enabled category and campaign eligibility).
-3. Score candidates through the saved CTR pipeline.
-4. Sort by score descending, with stable tie-breaking; return top-*K*.
-5. Add tests for empty candidates, invalid *K*, deterministic order and exclusion of ineligible ads.
-
-**Required deliverable:** `src/ranking.py`, a command-line demonstration, and ranking tests.
-
-**Optional:** Train a tiny PyTorch classifier and compare log loss, ranking output, complexity and latency. **Do not replace a working baseline merely to introduce neural networks.**
-
-**Think and discuss:** A classifier scores one impression; a ranker compares multiple *eligible* candidates. How do we build valid candidate features without using future interactions? Why might the best CTR score not maximize revenue?
-
-**Day 3 done when:** Given a request with several candidates, the system returns a deterministic ranked list and test cases prove eligibility is enforced.
-
-### Day 4 — Aggregate behavior and build a simple audience filter
-
-**Learn:** event schemas, deduplication, windowed aggregation, feature freshness, online/offline consistency, time leakage, user history and basic audience rules.
-
-**Implement:**
-
-1. Load `behavior_events.csv`, parse timestamps, and validate types and unique `event_id` values.
-2. Derive behavior features from events **strictly before a chosen scoring timestamp** (e.g., recent category clicks).
-3. Create simple, documented audience-eligibility rules based on past behavior.
-4. Integrate eligible categories with the ranking pipeline; test that later events don't influence earlier results.
-5. Explain the trade-off between event-by-event processing and short batching windows.
-
-**Required deliverable:** `src/audiences.py`, batch event-to-eligibility workflow, and tests proving no future-event leakage.
-
-**Scope note:** This is a rule-based audience filter with synthetic data, **not** a trained audience conversion-propensity model. A learned conversion gate is a future extension requiring properly defined targets and evaluation.
-
-**Day 4 done when:** A simulated user's past events can influence which ads are eligible, while future events cannot.
-
-### Day 5 — Expose the ranking pipeline as an API
-
-**Learn:** HTTP/JSON, request/response schemas, Pydantic validation, model loading, synchronous inference, errors, health checks, and batch versus real-time predictions.
-
-**Implement:**
-
-1. Create a FastAPI app with `GET /health` and `POST /rank`.
-2. Load the model once at startup, not on every request.
-3. Validate user context and candidate inputs; return ranked candidates and model version.
-4. Return clear errors for malformed requests and missing model artifacts.
-5. Add API integration tests and document `uvicorn` startup and sample requests.
-
-**Required deliverable:** `src/api.py`, automated endpoint tests, and a working localhost demo.
-
-**Optional:** Add a `Dockerfile` after local tests pass.
-
-**Day 5 done when:** A new developer can start the service from the README and get the same response structure.
-
-### Day 6 — Reliability, performance and ML operations
-
-**Learn:** unit versus integration tests, p50/p95/p99 latency, throughput, class prevalence, prediction drift, input drift, data quality, model versioning, retraining triggers and rollback.
-
-**Implement:**
-
-1. Execute all tests and fix failures.
-2. Benchmark warmed-up local requests under a stated load; report p50/p95 latency and requests/sec **as measured**, not guessed.
-3. Log structured request outcomes without recording raw user identifiers or sensitive payloads.
-4. Document monitoring: API errors, latency, input distributions, score distributions, label quality, delayed outcomes and model freshness.
-5. Describe a reproducible retrain → evaluate → promote/rollback workflow.
-
-**Required deliverable:** `reports/latency.md`, expanded tests, model/version information, and monitoring/retraining notes.
-
-**Optional:** Container build/smoke test and lightweight CI (tests on pull requests).
-
-**Day 6 done when:** You can demonstrate correctness, report actual local performance, and explain what could fail after deployment.
-
-### Day 7 — Integrate, demonstrate and defend design choices
-
-**Learn:** explaining ambiguous requirements, debugging under time pressure, defending algorithm choices, reviewing another engineer's code, and explaining trade-offs across data/model/API layers.
-
-**Implement:**
-
-1. Start from a fresh checkout/environment and run the documented setup.
-2. Run generation → profiling → training → evaluation → API → ranking.
-3. Each contributor independently fixes or extends one small function with tests.
-4. Swap code-review roles and explain the full system verbally.
-5. Record limitations, known issues and sensible next steps in the README or project notes.
-
-**Required deliverable:** Passing tests, reproducible live demo, clean Git history, and a short design/retrospective note.
-
-**Day 7 done when:** Both developers can run, debug, and explain the system without depending on code generation to answer basic implementation questions.
-
-## Working together
-
-### GitHub workflow
-
-1. Create the repository (suggested name: `adtech-ml-capstone`).
-2. Protect `main` if desired and avoid direct commits to it.
-3. Create small issues for each day's deliverables; use branches such as `day1/data-profile` or `day3/ranking`.
-4. Open focused PRs, link the issue, and attach test output and a short explanation of the change.
-5. Have the other developer review before merging. Avoid merging a PR if neither person understands how it works.
-6. At the end of each day, run the main branch's smoke tests together.
-
-### Suggested division of work
-
-| Day | Contributor A leads | Contributor B leads | Together |
+| Day | Theme | Core topics | Main output |
 |---|---|---|---|
-| 1 | Data exploration and CTR | Data validation and tests | Review data assumptions and labels |
-| 2 | Preprocessing and model training | Baseline and evaluation | Compare metrics and leakage risks |
-| 3 | Candidate scoring/ranking | Eligibility logic and ranking tests | Demo and peer review |
-| 4 | Event aggregation | Audience rules and temporal tests | Verify past-only features |
-| 5 | HTTP endpoint and schemas | API tests and client examples | End-to-end request walkthrough |
-| 6 | Benchmark and model monitoring | Reliability tests and documentation | Performance review |
-| 7 | Integration demo | Independent debugging challenge | Swap roles and present full system |
+| 1 | Python, Pandas and data exploration | DataFrames, dtypes, missing values, duplicates, grouping, CTR, class imbalance | Data profile and quality checks |
+| 2 | Data processing and streaming | Generators, CSV/JSON, chunked reading, memory-efficient aggregation, testing | Streaming CTR utility with tests |
+| 3 | ML classification and training | Splits (random vs time-based), leakage, encoding, logistic regression, serialization | Reproducible training pipeline and model artifact |
+| 4 | Model evaluation and ranking | Confusion matrix, ROC-AUC, PR-AUC, log loss, top-K, Precision@K, NDCG@K | Evaluation and ranking modules |
+| 5 | Feature engineering and feature stores | User and ad aggregates, freshness, point-in-time correctness, training-serving skew | Feature pipeline and local feature store |
+| 6 | Serving and low-latency inference | FastAPI, validation, Docker, p50/p95/p99 latency, caching, failures | Prediction API, Docker, benchmark |
+| 7 | Model optimization | Quantization, pruning, distillation, ONNX, ONNX Runtime, CPU vs GPU | One measured optimization experiment |
+| 8 | Production MLOps and reliability | Versioning, shadow and champion/challenger rollout, A/B tests, drift, rollback, PII | Production-readiness and monitoring design |
+| 9 | End-to-end system architecture | Candidate generation vs ranking, batch vs streaming, capacity, failure recovery | Architecture and trade-off documentation |
+| 10 | Integration, validation and review | End-to-end run, testing, benchmarking, debugging, code review, reproducibility | Working demo, final docs, future roadmap |
 
-**Rotate roles when possible.** Leading a task is not exclusive ownership: both should read the PR, run the tests, and explain the implementation.
+## 10. Daily deliverables and acceptance criteria
 
-### Daily collaboration rhythm (per person, target 3 hours)
+Each day ends with a merged pull request that meets the [definition of done](docs/CONTRIBUTING.md#definition-of-done) **and** the criteria below.
 
-- **45 minutes — Learn:** review the day's concepts and agree on success criteria.
-- **90 minutes — Build:** implement a small, testable vertical slice.
-- **45 minutes — Validate:** test, peer-review, document one trade-off, and merge.
+| Day | Required deliverables | Accepted when |
+|---|---|---|
+| 1 | Reproducible EDA script; data-quality checks (missing values, duplicates, label domain, hour range, unique values); CTR by device and category with counts; short notes on patterns and limitations (`reports/data_profile.md`) | Both contributors reproduce the profile from one command, data-validation tests pass, and both can explain why `clicked` and `converted` are not features |
+| 2 | Chunked CSV utility; streaming CTR aggregation; tests comparing streaming and in-memory results; memory/runtime notes | Streaming and in-memory CTRs match exactly for several chunk sizes, including chunk sizes that do not divide the row count, and bad input raises clear errors |
+| 3 | `src/train.py`; constant-rate baseline and logistic regression; saved artifact; short evaluation report (`reports/model_card.md`) | One command retrains with the same split and seed and gives the same metrics; preprocessing is fitted only on training data; the split method and leakage checks are documented |
+| 4 | Classification evaluation module; top-K ranking; Precision@K and NDCG@K with hand-computed test cases; written comparison of classification vs ranking objectives | Metric functions match hand-worked examples; ranking is deterministic with stable tie-breaking; the candidate-set construction and its limitations are documented |
+| 5 | Behavioral feature pipeline; simulated offline (batch) and online (lookup) access; feature validation tests; architecture notes | Tests prove that events after the scoring time never affect features, and that offline and online paths return identical values for the same entity and timestamp |
+| 6 | FastAPI `GET /health` and `POST /rank`; API tests; `Dockerfile`; latency benchmark (`reports/latency.md`); scaling trade-off notes | API tests pass; the container builds and serves a request; p50/p95/p99 are **measured** with stated hardware, warm-up, and concurrency; invalid input returns 4xx, not 500 |
+| 7 | Optimization study; one experiment (e.g., ONNX Runtime vs scikit-learn); size/latency/accuracy comparison (`reports/optimization.md`) | Optimized predictions match the original within a stated tolerance; the benchmark is reproducible; the notes explain when quantization, pruning, and distillation are or are not useful |
+| 8 | `docs/MLOPS.md`: production-readiness checklist, monitoring and alerting design, deployment and rollback strategy, A/B test design, privacy and security notes | Every alert has a metric, a threshold rationale, and an owner action; the rollback path is concrete; the A/B design states the unit, metric, and sample-size reasoning |
+| 9 | End-to-end architecture diagram; system design write-up; trade-off analysis; scaling and reliability notes in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | The diagram matches the code that exists; each major component lists its failure modes and fallback; capacity estimates show their assumptions |
+| 10 | End-to-end demo; full passing test suite; verified setup instructions; final architecture docs; limitations and future roadmap | A fresh clone reaches a ranked API response by following only the README, and both contributors can independently debug a small injected bug |
 
-If AI coding tools are used, treat their output as an untrusted draft: inspect code, run tests, and verify every important assumption. Each contributor should also complete some independent implementation and debugging.
+## 11. Testing strategy
 
-## Quality gates and definition of done
+| Level | What it covers | Status |
+|---|---|---|
+| Generator tests | Determinism, label domains, hour consistency, conversion-after-click, unique and ordered events | ✅ [tests/test_generate_synthetic.py](tests/test_generate_synthetic.py), 2 tests |
+| Data validation | Schema, nulls, duplicates, value domains | 🗓️ Day 1 |
+| Equivalence tests | Streaming vs in-memory results; offline vs online features | 🗓️ Days 2, 5 |
+| Leakage tests | Future events and post-outcome columns never reach features | 🗓️ Days 3, 5 |
+| Metric tests | Precision@K, NDCG@K, log loss against hand-computed values | 🗓️ Day 4 |
+| API tests | Valid and invalid requests, empty candidates, missing model | 🗓️ Day 6 |
+| Numerical parity | Optimized model vs original predictions | 🗓️ Day 7 |
+| End-to-end smoke test | Generate → train → serve → rank | 🗓️ Day 10 |
 
-A day's work is complete only if:
+Principles:
 
-- The relevant code runs from a documented command.
-- The change is covered by focused tests where practical.
-- New dependencies are documented and pinned or constrained appropriately.
-- Generated data is reproducible; no private customer information or API secrets are committed.
-- The PR explains assumptions, trade-offs, and known limitations.
-- The other contributor can understand and reproduce the result.
+- Run `python -m unittest discover -s tests -v` before every pull request. Every new module gets a `tests/test_<module>.py`.
+- Use small, generated fixtures, such as `generate(tmp, users=20, impressions=1000, seed=14)`, so tests run in seconds.
+- Test behavior and invariants, not implementation details. Prefer exact expected values where they can be worked out by hand.
+- Performance numbers belong in reports, not in assertions. Benchmarks are not unit tests.
 
-### Cross-cutting checks
+## 12. Collaboration and Git workflow
 
-- **Leakage:** `clicked`, `converted`, and future events never enter the impression-time feature vector.
-- **Integrity:** IDs, event timestamps, label domains and required fields are validated.
-- **Evaluation:** Compare against a trivial baseline and report split method and limitations.
-- **Serving:** Preserve training/inference preprocessing parity by saving the fitted pipeline.
-- **Reliability:** Handle invalid requests, missing artifacts and empty candidate lists explicitly.
-- **Privacy:** Use synthetic identifiers and minimize logging. Real user identifiers require a separate privacy review.
+Both contributors share ownership of the architecture and code. Nobody owns a component. Each day's work is split into small tasks, and the two contributors **alternate** who implements and who reviews, so each of them builds part of every layer.
 
-## Evaluation and performance
+Summary (details in [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md)):
 
-### Offline ML metrics
+1. Keep `main` green; do not commit to it directly.
+2. Branch per task: `day3/train-pipeline`, `day6/rank-endpoint`, `docs/monitoring-design`.
+3. Make small commits that each do one thing, with clear messages.
+4. Open a pull request with what changed, how it was tested, and its assumptions and limitations.
+5. The other contributor reviews, runs the tests locally, and should be able to explain the change before approving.
+6. At the end of each day, run the full test suite on `main` together and update the roadmap checkboxes.
 
-| Metric | Why it matters |
+Treat AI coding-assistant output as an untrusted draft: read it, test it, and make sure you can explain it. Each contributor should also implement and debug some work without assistance.
+
+## 13. Production ML considerations
+
+The project runs locally, but each day connects to a production concern:
+
+| Concern | How the project addresses it |
 |---|---|
-| Log loss | Evaluates quality of probabilistic click predictions |
-| ROC-AUC | Measures discrimination across thresholds |
-| PR-AUC | Especially informative with rare positive clicks; compare with base rate |
-| Calibration / Brier score (optional) | Checks whether predicted probabilities correspond to observed rates |
-| Accuracy (secondary) | May be misleading on imbalanced labels |
+| Data quality | Validation checks before training and at the API boundary (Days 1, 6) |
+| Leakage and point-in-time correctness | Time-based splits and past-only features with tests (Days 3, 5) |
+| Training-serving skew | One shared feature code path; the fitted preprocessing pipeline is saved with the model (Days 3, 5, 6) |
+| Latency | Measured p50/p95/p99 under stated load; the model is loaded once at startup (Days 6, 7) |
+| Reliability | Explicit handling of missing artifacts, empty candidates, and feature-store misses with defaults (Day 6) |
+| Model versioning | A version string stored with each artifact and returned by the API (Days 3, 6) |
+| Safe rollout | Shadow, champion/challenger, and A/B designs; rollback to the previous artifact (Day 8) |
+| Monitoring | Service metrics, input and score drift, delayed-label performance, model freshness (Day 8) |
+| Cost and performance | Optimization trade-offs and capacity estimates (Days 7, 9) |
 
-**Data split:** Start with a reproducible holdout and record the method. For more realistic evaluation, consider chronological splits and grouping by user to limit leakage or optimistic reuse. Do not report metrics without explaining what the split represents. Fit encoders and other learned preprocessing only on the training portion.
+## 14. Privacy and security
 
-### Ranking
+- **All data is synthetic.** No real user data may be committed. Any real dataset would need a separate privacy review, and the review would happen before the data is used.
+- Treat `user_id` as a pseudonymous identifier. In logs, record request IDs, model version, latency, and outcome, not raw user identifiers or full request payloads.
+- Never commit secrets, tokens, `.env` files, or credentials. `.gitignore` excludes common local files, but review `git diff --staged` before every commit.
+- Do not commit large binary model artifacts. `models/` is git-ignored, and artifacts should be reproducible from code and a seed.
+- Validate all API inputs and bound request sizes, such as the maximum number of candidates (Day 6).
+- Day 8 covers PII minimization, retention, access control, and consent considerations in more depth.
 
-The core demo ranks eligible candidates by model-estimated CTR. This is a straightforward baseline. Formal ranking metrics such as NDCG require a suitable relevance-labeled candidate set; do not claim offline ranking improvement solely from a CSV of independently observed impressions.
+## 15. Project limitations
 
-### Service metrics
+- **Synthetic data:** click patterns are generated by simple rules, so metrics show learning on known patterns, not real-world performance.
+- **One candidate per request:** the logs record only the ad that was shown. Ranking metrics need constructed candidate sets, and offline ranking results cannot be read as unbiased estimates of online performance.
+- **No economics:** there are no bids, budgets, pacing, or auctions. Ranking uses predicted CTR only.
+- **Local only:** the feature store is an in-process simulation, and nothing is deployed to cloud infrastructure.
+- **Small model:** logistic regression on a few features. Quantization and pruning have little practical effect at this size, and Day 7 documents this honestly.
+- **No live traffic:** A/B testing and monitoring are designed and simulated, not run against real users.
 
-Record request count, error rate, p50/p95 latency, requests/sec, model version and environment. Note whether results include serialization and API overhead and whether the server was warmed up. All performance numbers must come from actual runs.
+## 16. Future improvements
 
-### Business metrics
+➕ Optional extensions after Day 10, roughly in order of learning value:
 
-CTR, conversion rate, audience coverage and revenue/yield are useful real-world goals. Our synthetic offline experiment **cannot establish** real-world changes to any of them. A real A/B test would require randomized traffic assignment and appropriate measurement.
-
-## Risks, limitations, and stretch goals
-
-| Risk or limitation | Practical approach |
-|---|---|
-| One-week time budget | Prioritize a working scikit-learn baseline, ranking, API and tests |
-| Synthetic click labels | Clearly report that patterns were generated; don't claim external validity |
-| No real auction, bids or budgets | Rank by predicted CTR only; document the missing economic objective |
-| Simplified audience rules | Implement clear temporal rules; do not present as trained conversion prediction |
-| Repeated users and time effects | Document split assumptions and, if possible, compare to temporal evaluation |
-| Dataset lacks full candidate exposure information | Avoid claiming unbiased real ranking evaluation |
-| Optional neural model takes too long | Defer PyTorch comparison until required deliverables are complete |
-| Time pressure | Drop Docker/CI polish before dropping correctness tests or API functionality |
-
-**After Day 7, optional extensions:** public click dataset experiment, calibrated deep CTR model with embeddings, trained audience conversion model, richer contextual features, a streaming broker, online feature store, counterfactual/off-policy evaluation, load testing at scale, and cloud/Kubernetes deployment.
-
-## Final demonstration
-
-A successful demo should show, in this order:
-
-```text
-1. Generate sample impression + event data.
-2. Display data checks and descriptive CTR breakdowns.
-3. Train baseline and CTR model; show held-out metrics.
-4. Build audience eligibility from past behavior events.
-5. Submit request with candidate ads to POST /rank.
-6. Show eligibility filtering, ranked results, and model version.
-7. Run unit/integration tests.
-8. Show measured API latency and explain monitoring/retraining.
-9. Have each contributor explain one major design choice and fix a small bug.
-```
-
-**Final guiding principle:** Understand the problem → make the data trustworthy → choose the simplest useful model → build a working system → measure and test it → explain what it can and cannot do.
+- A chronological train/validation/test pipeline with a calibration analysis (reliability curve, Brier score)
+- A small PyTorch or embedding-based CTR model, compared with the baseline and used for a meaningful quantization or distillation experiment
+- A public click-log dataset to test the pipeline on realistic data
+- Rule-based or learned audience eligibility from behavioral features
+- Event streaming with a local broker, and a real online store such as Redis
+- Off-policy or counterfactual evaluation for ranking
+- CI with test, lint, and container-build checks; load testing at higher concurrency
+- Container orchestration and cloud deployment
 
 ---
 
-**License:** Not yet selected. Add a license before inviting public reuse or contributions outside the project team.
+**License:** not yet selected. Add one before inviting reuse or contributions from outside the project team.
