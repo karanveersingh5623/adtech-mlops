@@ -2,6 +2,11 @@
 
 This document describes the system **as it exists today** and the **target architecture** the [roadmap](ROADMAP.md) builds toward. It is a living document. Day 5 adds the feature-store details and Day 9 expands it into a full system design. Whenever the code changes, update the diagrams in this file so that they keep matching it.
 
+Background reading:
+
+- For how a real ad request flows through publishers, exchanges, and ranking services, read the [AdTech fundamentals in Day 1](DAY1.md#part-1--adtech-fundamentals).
+- For the vocabulary used on Days 3–9, read [Core ML system concepts](#8-core-ml-system-concepts): training vs inference vs serving vs evaluation, model size vs data volume, and retraining loops.
+
 Status markers: ✅ implemented · 🗓️ planned · ➕ optional.
 
 ## 1. Current state ✅
@@ -41,7 +46,7 @@ flowchart TB
         TRAIN["Training pipeline<br/>Day 3"]
         EVAL["Evaluation and ranking metrics<br/>Day 4"]
         REG[("models/<br/>artifact + metadata")]
-        ONNX["ONNX export<br/>Day 7"]
+        ONNX["Optimization: ONNX, quantization,<br/>pruning, distillation<br/>Days 7–8"]
     end
 
     subgraph Online["Online path (request time)"]
@@ -50,7 +55,7 @@ flowchart TB
         RANK["Score and top-K<br/>Day 4"]
     end
 
-    subgraph Ops["Operations (Day 8)"]
+    subgraph Ops["Operations (Day 9)"]
         LOG["Structured logs"]
         MON["Latency, errors,<br/>drift, score distribution"]
     end
@@ -97,7 +102,7 @@ sequenceDiagram
 | Features 🗓️ | `src/features.py`, `src/feature_store.py` | Point-in-time features; offline and online access | No future events; offline equals online |
 | Serving 🗓️ | `src/api.py` | HTTP validation, scoring, response | 4xx for bad input; model loaded once |
 | Benchmark 🗓️ | `src/benchmark.py` | p50/p95/p99, throughput | Numbers reported with conditions |
-| Optimization 🗓️ | `src/optimize.py` | ONNX export and comparison | Prediction parity within tolerance |
+| Optimization 🗓️ | `src/nn_model.py`, `src/optimize.py` | Small neural baseline; ONNX export, quantization (Day 7); pruning, distillation (Day 8) | Quality and parity measured against the FP32 baseline |
 
 ## 4. Key design decisions and trade-offs
 
@@ -145,8 +150,9 @@ This project covers the core correctness ideas (point-in-time joins, parity, fre
 | Model artifact | Missing or corrupt at startup | Service cannot score | Fail health check at startup; keep the previous version for rollback |
 | Online features | Unknown user or store unavailable | Lower-quality scores | Fall back to default feature values; count misses as a metric |
 | Input | Malformed or oversized request | Errors, latency spikes | Pydantic validation; maximum candidate count; 4xx responses |
-| Data | Schema change, bad labels | Silent model degradation | Validation before training; drift monitoring (Day 8) |
-| Latency | Slow inference or many candidates | Missed request deadlines | Benchmark p99; bound candidates; optimize (Day 7); scale replicas |
+| Data | Schema change, bad labels | Silent model degradation | Validation before training; drift monitoring (Day 9) |
+| Latency | Slow inference or many candidates | Missed request deadlines | Benchmark p99; bound candidates; optimize the model (Days 7–8); scale replicas for throughput |
+| Retraining | New model is worse, or trained on biased or leaked data | Lower quality after deployment | Evaluation gate, champion/challenger, staged rollout, rollback (section 8.3) |
 
 ## 7. Out of scope
 
@@ -158,3 +164,106 @@ The following items are **not** part of the target architecture. Day 9 discusses
 - Managed feature stores and model registries
 - Real-time bidding and auctions
 - GPU serving
+
+## 8. Core ML system concepts
+
+These distinctions come up on almost every day of the roadmap. Each one connects a theoretical idea to a production decision.
+
+### 8.1 Training, inference, serving and evaluation
+
+| Term | What happens | Changes model parameters? | Main concerns |
+|---|---|---|---|
+| **Training** | An optimizer updates parameters to reduce a loss on training data | Yes | Data volume, compute time, convergence, leakage, reproducibility |
+| **Inference** | The trained model computes predictions from input features | No | Per-prediction compute, numerical precision, latency of one call |
+| **Serving** | Inference is made available to other systems, for example through an API | No | Routing, request validation, concurrency, batching, scaling, versioning, monitoring, fallbacks, reliability |
+| **Evaluation** | Prediction quality or business outcomes are measured with appropriate data and metrics | No | Correct splits, labels, metric choice, offline vs online validity |
+
+Two common confusions:
+
+- **Inference is not evaluation.** Inference produces a score, and it can run with no label at all, which is the normal case online. Evaluation compares scores with known outcomes, using metrics such as log loss, AUC, or NDCG. Evaluation *uses* inference, but it also needs labels and a metric.
+- **Scaling the service is not optimizing the model.** Adding replicas (horizontal scaling, for example more pods) increases **throughput**: more requests per second in total. When the service is saturated, it also cuts queueing delay, so the observed p95/p99 drops. It does not make one prediction compute faster, and it multiplies cost. Model optimization (Days 7–8) reduces the **cost of each inference**: fewer operations, smaller numbers, smaller memory footprint. That can lower latency and raise throughput per replica. Production systems usually need both.
+
+### 8.2 Model size vs data volume
+
+**More training data does not, by itself, make a fixed-architecture model larger.**
+
+- **A fixed architecture has a fixed parameter count.** Training changes the parameter *values*, not how many parameters there are.
+- **Parameter magnitude does not change storage.** An FP32 parameter takes 4 bytes whether its value is 0.001 or 1,000. Compressed archives can differ slightly with the values; the in-memory size and the compute do not.
+- **Model size changes when one of these changes:**
+  - the architecture (more layers or wider layers)
+  - the parameter count
+  - the size of vocabularies and embedding tables
+  - the numerical representation (FP32 → FP16 → INT8)
+- **Data volume changes training, not inference.** More data means more training compute, a larger data pipeline, more memory and storage for features, and longer retraining. It does not change the cost of one inference.
+
+**Numerical illustration.** Consider a small multilayer perceptron (MLP) for this project's one-hot inputs. The inputs are 2 device values, 4 categories, and 24 hours, giving 30 features. The layers are 30 → 64 → 32 → 1.
+
+| Layer | Weights | Biases | Parameters |
+|---|---|---|---|
+| 30 → 64 | 1,920 | 64 | 1,984 |
+| 64 → 32 | 2,048 | 32 | 2,080 |
+| 32 → 1 | 32 | 1 | 33 |
+| **Total** | | | **4,097** |
+
+| | 15,000 training rows | 1,500,000 training rows |
+|---|---|---|
+| Parameters | 4,097 | 4,097 (unchanged) |
+| FP32 weights | ≈ 16 KB | ≈ 16 KB (unchanged) |
+| FP16 / INT8 weights | ≈ 8 KB / ≈ 4 KB, plus a small overhead for INT8 scales | same |
+| Inference compute per example (≈ 2 × parameters) | ≈ 8,200 floating-point operations | ≈ 8,200 (unchanged) |
+| Training compute per epoch (rule of thumb ≈ 6 × parameters × rows) | ≈ 3.7 × 10⁸ operations | ≈ 3.7 × 10¹⁰ operations (100×) |
+
+**Where data *does* grow the model: embedding tables.** If the model learns a 16-dimensional embedding per user, then:
+
+- 300 users need 4,800 parameters, about 19 KB in FP32.
+- 10 million users need 160 million parameters, about 640 MB in FP32.
+
+Here more data means more distinct IDs, so the *vocabulary* grows, and the model grows with it. This is why production CTR models are often dominated by embedding tables, and why their size is managed with hashing, frequency cut-offs, or lower precision.
+
+**Why this matters for system design:**
+
+- Training scalability is about data throughput, distributed compute, and retraining time.
+- Inference scalability is about per-request latency, model memory per replica, and request volume.
+- They are different problems with different solutions.
+
+### 8.3 Retraining and feedback loops
+
+```mermaid
+flowchart LR
+    SERVE["Production model<br/>(champion)"] --> EVENTS["Impression, click,<br/>conversion events"]
+    EVENTS --> PROC["Offline processing<br/>join, dedupe, wait for<br/>delayed labels"]
+    PROC --> FEAT["Feature computation<br/>(point-in-time)"]
+    FEAT --> TRAIN["Retrain"]
+    TRAIN --> EVAL{"Offline evaluation<br/>+ approval gate"}
+    EVAL -- fails --> STOP["Keep champion;<br/>investigate"]
+    EVAL -- passes --> REG[("Register candidate<br/>(challenger)")]
+    REG --> CMP["Shadow → canary →<br/>A/B test vs champion"]
+    CMP -- worse or guardrail breach --> ROLL["Roll back /<br/>keep champion"]
+    CMP -- better --> PROMOTE["Ramp to full traffic"]
+    PROMOTE --> SERVE
+```
+
+1. **Event collection.**
+   - Impressions are logged when an ad is shown.
+   - Clicks are logged within seconds of the impression.
+   - Conversions can take hours or days to arrive.
+2. **Offline processing.** Events are deduplicated and joined to their impressions. A training example is labeled only after its label window has closed.
+3. **Feature computation.** Features are rebuilt with point-in-time correctness (Day 5).
+4. **Retraining.** A new model is trained on a recent time window.
+5. **Evaluation and approval.** The new model is compared with the current production model on the *same* held-out period, using quality metrics, calibration, and sanity checks. A failing model goes no further.
+6. **Candidate registration.** An approved model is stored with its version, data window, metrics, and code version. It is now a *challenger*, not yet in production.
+7. **Champion/challenger comparison.** The challenger is first run in shadow, scoring live traffic without affecting decisions. It then receives a small canary share of traffic to check operational health. Finally it is tested in an A/B test against the current *champion* to measure outcomes.
+8. **Controlled deployment and rollback.** A challenger that wins is ramped up to full traffic. If guardrail metrics degrade at any stage, traffic returns to the previous version.
+
+**Retraining does not mean automatic replacement.** A freshly trained model is only a candidate. Promotion requires passing evaluation and online comparison, and the previous version stays available for rollback.
+
+**Learning topics in this loop:**
+
+- **Delayed labels.**
+  - Conversions arrive late, so recent impressions look like non-conversions until their attribution window closes.
+  - Training on them too early biases the model downward.
+  - Monitoring that uses them too early reports a false drop in quality.
+- **Feedback loops.** The model decides which ads are shown, and only shown ads produce labels. The next model is therefore trained on data shaped by the previous one. Ads the model underrates are rarely shown, so the mistake is rarely corrected.
+- **Selection and exposure bias.** Logged data covers only the candidates that were shown, in the positions where they were shown. Offline metrics computed on this data do not measure what would have happened under a different policy. Common mitigations are a small exploration share of traffic, position-aware modeling, and counterfactual (off-policy) evaluation.
+
+This project simulates the offline half of the loop (Days 3–5) and designs the online half (Day 9). It does not run live experiments.
