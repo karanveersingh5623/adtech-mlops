@@ -9,6 +9,18 @@ This project is built by two contributors who are learning together. The workflo
 - **Small and verifiable.** Prefer several small pull requests that each work and are tested over one large change.
 - **Correctness over polish.** If time runs short, drop optional extras before tests or required deliverables.
 
+## Learning method
+
+This repository exists so that two engineers learn by implementing. The documentation follows these rules:
+
+- **Contributors write their own solutions.** Exercise guides (`docs/DAY*.md`, `docs/ROADMAP.md`) give requirements, examples, hints, and acceptance criteria. They **do not** contain completed solutions. Do not add solutions to the guides. Solutions belong in `src/` and `tests/` on the day they are built.
+- **Theory connects to a production decision.** Every topic should answer "what would I do differently in a real system because of this?" For example, quantization theory leads to the decision whether INT8 will meet a latency budget on the target hardware.
+- **Every day ends with verification and explanation.**
+  - Run the tests and the documented commands.
+  - Answer the day's *Explain* or *Questions* section out loud to the other contributor.
+- **Reviews focus on understanding and reasoning.** A review asks "why this approach, what are the alternatives, and how do we know it works?", not only "does it pass?"
+- **Measure, don't assume.** Performance and quality claims in reports come from runs in this repository, with the conditions stated.
+
 ## Branches
 
 `main` is always runnable, and its tests always pass. Never commit to it directly.
@@ -77,11 +89,13 @@ A task is complete when:
 
 ## Daily routine
 
+The durations below add up to about 3–4 hours. Shorten Learn or Build on lighter days.
+
 1. **Start (10 min):** agree on the day's tasks and acceptance criteria, using [ROADMAP.md](ROADMAP.md), and decide who implements and who reviews each task.
-2. **Learn (≈45 min):** study the day's topics. Each person notes one question to discuss.
-3. **Build (≈90 min):** implement on feature branches; open pull requests early as drafts.
+2. **Learn (≈45–60 min):** study the day's topics. Each person notes one question to discuss.
+3. **Build (≈90–120 min):** implement on feature branches; open pull requests early as drafts.
 4. **Validate (≈45 min):** review, run the tests, merge, then run the full suite on `main` together.
-5. **Close (5 min):** tick off completed deliverables and write down one trade-off or open question.
+5. **Explain and close (10–15 min):** each person explains one concept from the day to the other, ticks off completed deliverables, and writes down one trade-off or open question.
 
 ## Using AI coding assistants
 
